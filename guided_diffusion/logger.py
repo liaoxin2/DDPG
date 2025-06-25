@@ -1,16 +1,15 @@
+import os
+
 """
 Logger copied from OpenAI baselines to avoid extra RL-based dependencies:
 https://github.com/openai/baselines/blob/ea25b9e8b234e6ee1bca43083f8f3cf974143998/baselines/logger.py
 """
-
-import os
-import sys
-import shutil
-import os.path as osp
-import json
-import time
 import datetime
+import json
+import shutil
+import sys
 import tempfile
+import time
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager
@@ -19,7 +18,6 @@ DEBUG = 10
 INFO = 20
 WARN = 30
 ERROR = 40
-
 DISABLED = 50
 
 
@@ -46,35 +44,28 @@ class HumanOutputFormat(KVWriter, SeqWriter):
             self.own_file = False
 
     def writekvs(self, kvs):
-        # Create strings for printing
         key2str = {}
-        for (key, val) in sorted(kvs.items()):
+        for key, val in sorted(kvs.items()):
             if hasattr(val, "__float__"):
                 valstr = "%-8.3g" % val
             else:
                 valstr = str(val)
             key2str[self._truncate(key)] = self._truncate(valstr)
-
-        # Find max widths
         if len(key2str) == 0:
             print("WARNING: tried to write empty key-value dict")
             return
         else:
             keywidth = max(map(len, key2str.keys()))
             valwidth = max(map(len, key2str.values()))
-
-        # Write out the data
         dashes = "-" * (keywidth + valwidth + 7)
         lines = [dashes]
-        for (key, val) in sorted(key2str.items(), key=lambda kv: kv[0].lower()):
+        for key, val in sorted(key2str.items(), key=lambda kv: kv[0].lower()):
             lines.append(
                 "| %s%s | %s%s |"
                 % (key, " " * (keywidth - len(key)), val, " " * (valwidth - len(val)))
             )
         lines.append(dashes)
         self.file.write("\n".join(lines) + "\n")
-
-        # Flush the output to the file
         self.file.flush()
 
     def _truncate(self, s):
@@ -83,9 +74,9 @@ class HumanOutputFormat(KVWriter, SeqWriter):
 
     def writeseq(self, seq):
         seq = list(seq)
-        for (i, elem) in enumerate(seq):
+        for i, elem in enumerate(seq):
             self.file.write(elem)
-            if i < len(seq) - 1:  # add space unless this is the last one
+            if i < len(seq) - 1:
                 self.file.write(" ")
         self.file.write("\n")
         self.file.flush()
@@ -117,7 +108,6 @@ class CSVOutputFormat(KVWriter):
         self.sep = ","
 
     def writekvs(self, kvs):
-        # Add our current row to the history
         extra_keys = list(kvs.keys() - self.keys)
         extra_keys.sort()
         if extra_keys:
@@ -125,7 +115,7 @@ class CSVOutputFormat(KVWriter):
             self.file.seek(0)
             lines = self.file.readlines()
             self.file.seek(0)
-            for (i, k) in enumerate(self.keys):
+            for i, k in enumerate(self.keys):
                 if i > 0:
                     self.file.write(",")
                 self.file.write(k)
@@ -134,7 +124,7 @@ class CSVOutputFormat(KVWriter):
                 self.file.write(line[:-1])
                 self.file.write(self.sep * len(extra_keys))
                 self.file.write("\n")
-        for (i, k) in enumerate(self.keys):
+        for i, k in enumerate(self.keys):
             if i > 0:
                 self.file.write(",")
             v = kvs.get(k)
@@ -159,8 +149,8 @@ class TensorBoardOutputFormat(KVWriter):
         prefix = "events"
         path = osp.join(osp.abspath(dir), prefix)
         import tensorflow as tf
-        from tensorflow.python import pywrap_tensorflow
         from tensorflow.core.util import event_pb2
+        from tensorflow.python import pywrap_tensorflow
         from tensorflow.python.util import compat
 
         self.tf = tf
@@ -175,9 +165,7 @@ class TensorBoardOutputFormat(KVWriter):
 
         summary = self.tf.Summary(value=[summary_val(k, v) for k, v in kvs.items()])
         event = self.event_pb2.Event(wall_time=time.time(), summary=summary)
-        event.step = (
-            self.step
-        )  # is there any reason why you'd want to specify the step?
+        event.step = self.step
         self.writer.WriteEvent(event)
         self.writer.Flush()
         self.step += 1
@@ -204,11 +192,6 @@ def make_output_format(format, ev_dir, log_suffix=""):
         raise ValueError("Unknown format specified: %s" % (format,))
 
 
-# ================================================================
-# API
-# ================================================================
-
-
 def logkv(key, val):
     """
     Log a value of some diagnostic
@@ -229,7 +212,7 @@ def logkvs(d):
     """
     Log a dictionary of key-value pairs
     """
-    for (k, v) in d.items():
+    for k, v in d.items():
         logkv(k, v)
 
 
@@ -317,33 +300,24 @@ def profile(n):
     return decorator_with_name
 
 
-# ================================================================
-# Backend
-# ================================================================
-
-
 def get_current():
     if Logger.CURRENT is None:
         _configure_default_logger()
-
     return Logger.CURRENT
 
 
 class Logger(object):
-    DEFAULT = None  # A logger with no output files. (See right below class definition)
-    # So that you can still log to the terminal without setting up any output files
-    CURRENT = None  # Current logger being used by the free functions above
+    DEFAULT = None
+    CURRENT = None
 
     def __init__(self, dir, output_formats, comm=None):
-        self.name2val = defaultdict(float)  # values this iteration
+        self.name2val = defaultdict(float)
         self.name2cnt = defaultdict(int)
         self.level = INFO
         self.dir = dir
         self.output_formats = output_formats
         self.comm = comm
 
-    # Logging API, forwarded
-    # ----------------------------------------
     def logkv(self, key, val):
         self.name2val[key] = val
 
@@ -360,12 +334,12 @@ class Logger(object):
                 self.comm,
                 {
                     name: (val, self.name2cnt.get(name, 1))
-                    for (name, val) in self.name2val.items()
+                    for name, val in self.name2val.items()
                 },
             )
             if self.comm.rank != 0:
-                d["dummy"] = 1  # so we don't get a warning about empty dict
-        out = d.copy()  # Return the dict for unit testing purposes
+                d["dummy"] = 1
+        out = d.copy()
         for fmt in self.output_formats:
             if isinstance(fmt, KVWriter):
                 fmt.writekvs(d)
@@ -377,8 +351,6 @@ class Logger(object):
         if self.level <= level:
             self._do_log(args)
 
-    # Configuration
-    # ----------------------------------------
     def set_level(self, level):
         self.level = level
 
@@ -392,8 +364,6 @@ class Logger(object):
         for fmt in self.output_formats:
             fmt.close()
 
-    # Misc
-    # ----------------------------------------
     def _do_log(self, args):
         for fmt in self.output_formats:
             if isinstance(fmt, SeqWriter):
@@ -401,8 +371,6 @@ class Logger(object):
 
 
 def get_rank_without_mpi_import():
-    # check environment variables here instead of importing mpi4py
-    # to avoid calling MPI_Init() when this module is imported
     for varname in ["PMI_RANK", "OMPI_COMM_WORLD_RANK"]:
         if varname in os.environ:
             return int(os.environ[varname])
@@ -421,7 +389,7 @@ def mpi_weighted_mean(comm, local_name2valcount):
         name2sum = defaultdict(float)
         name2count = defaultdict(float)
         for n2vc in all_name2valcount:
-            for (name, (val, count)) in n2vc.items():
+            for name, (val, count) in n2vc.items():
                 try:
                     val = float(val)
                 except ValueError:
@@ -434,7 +402,7 @@ def mpi_weighted_mean(comm, local_name2valcount):
                 else:
                     name2sum[name] += val * count
                     name2count[name] += count
-        return {name: name2sum[name] / name2count[name] for name in name2sum}
+        return {name: (name2sum[name] / name2count[name]) for name in name2sum}
     else:
         return {}
 
@@ -453,11 +421,9 @@ def configure(dir=None, format_strs=None, comm=None, log_suffix=""):
     assert isinstance(dir, str)
     dir = os.path.expanduser(dir)
     os.makedirs(os.path.expanduser(dir), exist_ok=True)
-
     rank = get_rank_without_mpi_import()
     if rank > 0:
         log_suffix = log_suffix + "-rank%03i" % rank
-
     if format_strs is None:
         if rank == 0:
             format_strs = os.getenv("OPENAI_LOG_FORMAT", "stdout,log,csv").split(",")
@@ -465,7 +431,6 @@ def configure(dir=None, format_strs=None, comm=None, log_suffix=""):
             format_strs = os.getenv("OPENAI_LOG_FORMAT_MPI", "log").split(",")
     format_strs = filter(None, format_strs)
     output_formats = [make_output_format(f, dir, log_suffix) for f in format_strs]
-
     Logger.CURRENT = Logger(dir=dir, output_formats=output_formats, comm=comm)
     if output_formats:
         log("Logging to %s" % dir)
@@ -492,4 +457,3 @@ def scoped_configure(dir=None, format_strs=None, comm=None):
     finally:
         Logger.CURRENT.close()
         Logger.CURRENT = prevlogger
-

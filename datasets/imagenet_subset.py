@@ -1,6 +1,7 @@
-import torch.utils.data as data
-import torchvision.transforms as transforms
 from PIL import Image
+
+import paddle
+
 
 class CenterCropLongEdge(object):
     """Crops the given PIL Image on the long edge.
@@ -17,42 +18,38 @@ class CenterCropLongEdge(object):
         Returns:
             PIL Image: Cropped image.
         """
-        return transforms.functional.center_crop(img, min(img.size))
+        return paddle.vision.transforms.center_crop(img=img, output_size=min(img.size))
 
     def __repr__(self):
         return self.__class__.__name__
 
+
 def pil_loader(path):
-    # open path as file to avoid ResourceWarning
-    # (https://github.com/python-pillow/Pillow/issues/835)
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         img = Image.open(f)
-        return img.convert('RGB')
+        return img.convert("RGB")
 
 
 def accimage_loader(path):
     import accimage
+
     try:
         return accimage.Image(path)
     except IOError:
-        # Potentially a decoding problem, fall back to PIL.Image
         return pil_loader(path)
 
+
 def default_loader(path):
-    from torchvision import get_image_backend
-    if get_image_backend() == 'accimage':
+>>>>>>    if torchvision.get_image_backend() == "accimage":
         return accimage_loader(path)
     else:
         return pil_loader(path)
 
-class ImageDataset(data.Dataset):
 
-    def __init__(self,
-                 root_dir,
-                 meta_file,
-                 transform=None,
-                 image_size=128,
-                 normalize=True):
+class ImageDataset(paddle.io.Dataset):
+    def __init__(
+        self, root_dir, meta_file, transform=None, image_size=128, normalize=True
+    ):
         self.root_dir = root_dir
         if transform is not None:
             self.transform = transform
@@ -60,25 +57,30 @@ class ImageDataset(data.Dataset):
             norm_mean = [0.5, 0.5, 0.5]
             norm_std = [0.5, 0.5, 0.5]
             if normalize:
-                self.transform = transforms.Compose([
-                    CenterCropLongEdge(),
-                    transforms.Resize(image_size),
-                    transforms.ToTensor(),
-                    transforms.Normalize(norm_mean, norm_std)
-                ])
+                self.transform = paddle.vision.transforms.Compose(
+                    transforms=[
+                        CenterCropLongEdge(),
+                        paddle.vision.transforms.Resize(size=image_size),
+                        paddle.vision.transforms.ToTensor(),
+                        paddle.vision.transforms.Normalize(
+                            mean=norm_mean, std=norm_std
+                        ),
+                    ]
+                )
             else:
-                self.transform = transforms.Compose([
-                    CenterCropLongEdge(),
-                    transforms.Resize(image_size),
-                    transforms.ToTensor()
-                ])
+                self.transform = paddle.vision.transforms.Compose(
+                    transforms=[
+                        CenterCropLongEdge(),
+                        paddle.vision.transforms.Resize(size=image_size),
+                        paddle.vision.transforms.ToTensor(),
+                    ]
+                )
         with open(meta_file) as f:
             lines = f.readlines()
         print("building dataset from %s" % meta_file)
         self.num = len(lines)
         self.metas = []
         self.classifier = None
-        # suffix = ".jpeg"
         suffix = ""
         for line in lines:
             line_split = line.rstrip().split()
@@ -92,12 +94,9 @@ class ImageDataset(data.Dataset):
         return self.num
 
     def __getitem__(self, idx):
-        filename = self.root_dir + '/' + self.metas[idx][0]
+        filename = self.root_dir + "/" + self.metas[idx][0]
         cls = self.metas[idx][1]
         img = default_loader(filename)
-
-        # transform
         if self.transform is not None:
             img = self.transform(img)
-
-        return img, cls #, self.metas[idx][0]
+        return img, cls

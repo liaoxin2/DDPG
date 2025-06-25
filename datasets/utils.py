@@ -1,8 +1,9 @@
-import os
-import os.path
-import hashlib
 import errno
-from torch.utils.model_zoo import tqdm
+import hashlib
+import os
+
+import paddle
+from tqdm import tqdm
 
 
 def gen_bar_updater():
@@ -23,9 +24,8 @@ def check_integrity(fpath, md5=None):
     if not os.path.isfile(fpath):
         return False
     md5o = hashlib.md5()
-    with open(fpath, 'rb') as f:
-        # read in 1MB chunks
-        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+    with open(fpath, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
             md5o.update(chunk)
     md5c = md5o.hexdigest()
     if md5c != md5:
@@ -61,28 +61,23 @@ def download_url(url, root, filename=None, md5=None):
     if not filename:
         filename = os.path.basename(url)
     fpath = os.path.join(root, filename)
-
     makedir_exist_ok(root)
-
-    # downloads file
     if os.path.isfile(fpath) and check_integrity(fpath, md5):
-        print('Using downloaded and verified file: ' + fpath)
+        print("Using downloaded and verified file: " + fpath)
     else:
         try:
-            print('Downloading ' + url + ' to ' + fpath)
-            urllib.request.urlretrieve(
-                url, fpath,
-                reporthook=gen_bar_updater()
-            )
+            print("Downloading " + url + " to " + fpath)
+            urllib.request.urlretrieve(url, fpath, reporthook=gen_bar_updater())
         except OSError:
-            if url[:5] == 'https':
-                url = url.replace('https:', 'http:')
-                print('Failed download. Trying https -> http instead.'
-                      ' Downloading ' + url + ' to ' + fpath)
-                urllib.request.urlretrieve(
-                    url, fpath,
-                    reporthook=gen_bar_updater()
+            if url[:5] == "https":
+                url = url.replace("https:", "http:")
+                print(
+                    "Failed download. Trying https -> http instead. Downloading "
+                    + url
+                    + " to "
+                    + fpath
                 )
+                urllib.request.urlretrieve(url, fpath, reporthook=gen_bar_updater())
 
 
 def list_dir(root, prefix=False):
@@ -95,15 +90,10 @@ def list_dir(root, prefix=False):
     """
     root = os.path.expanduser(root)
     directories = list(
-        filter(
-            lambda p: os.path.isdir(os.path.join(root, p)),
-            os.listdir(root)
-        )
+        filter(lambda p: os.path.isdir(os.path.join(root, p)), os.listdir(root))
     )
-
     if prefix is True:
         directories = [os.path.join(root, d) for d in directories]
-
     return directories
 
 
@@ -121,13 +111,11 @@ def list_files(root, suffix, prefix=False):
     files = list(
         filter(
             lambda p: os.path.isfile(os.path.join(root, p)) and p.endswith(suffix),
-            os.listdir(root)
+            os.listdir(root),
         )
     )
-
     if prefix is True:
         files = [os.path.join(root, d) for d in files]
-
     return files
 
 
@@ -140,37 +128,30 @@ def download_file_from_google_drive(file_id, root, filename=None, md5=None):
         filename (str, optional): Name to save the file under. If None, use the id of the file.
         md5 (str, optional): MD5 checksum of the download. If None, do not check
     """
-    # Based on https://stackoverflow.com/questions/38511444/python-download-files-from-google-drive-using-url
     import requests
-    url = "https://docs.google.com/uc?export=download"
 
+    url = "https://docs.google.com/uc?export=download"
     root = os.path.expanduser(root)
     if not filename:
         filename = file_id
     fpath = os.path.join(root, filename)
-
     makedir_exist_ok(root)
-
     if os.path.isfile(fpath) and check_integrity(fpath, md5):
-        print('Using downloaded and verified file: ' + fpath)
+        print("Using downloaded and verified file: " + fpath)
     else:
         session = requests.Session()
-
-        response = session.get(url, params={'id': file_id}, stream=True)
+        response = session.get(url, params={"id": file_id}, stream=True)
         token = _get_confirm_token(response)
-
         if token:
-            params = {'id': file_id, 'confirm': token}
+            params = {"id": file_id, "confirm": token}
             response = session.get(url, params=params, stream=True)
-
         _save_response_content(response, fpath)
 
 
 def _get_confirm_token(response):
     for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
+        if key.startswith("download_warning"):
             return value
-
     return None
 
 
@@ -179,7 +160,7 @@ def _save_response_content(response, destination, chunk_size=32768):
         pbar = tqdm(total=None)
         progress = 0
         for chunk in response.iter_content(chunk_size):
-            if chunk:  # filter out keep-alive new chunks
+            if chunk:
                 f.write(chunk)
                 progress += len(chunk)
                 pbar.update(progress - pbar.n)

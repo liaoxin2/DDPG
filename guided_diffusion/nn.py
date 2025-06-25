@@ -1,22 +1,20 @@
+import paddle
+
 """
 Various utilities for neural networks.
 """
-
 import math
-
-import torch as th
-import torch.nn as nn
+import paddle.nn as nn
 
 
-# PyTorch 1.7 has SiLU, but we support PyTorch 1.5.
-class SiLU(nn.Module):
+class SiLU(paddle.nn.Layer):
     def forward(self, x):
-        return x * th.sigmoid(x)
+        return x * paddle.nn.functional.sigmoid(x=x)
 
 
-class GroupNorm32(nn.GroupNorm):
+class GroupNorm32(paddle.nn.GroupNorm):
     def forward(self, x):
-        return super().forward(x.float()).type(x.dtype)
+        return super().forward(x.astype(dtype="float32")).astype(x.dtype)
 
 
 def conv_nd(dims, *args, **kwargs):
@@ -24,11 +22,11 @@ def conv_nd(dims, *args, **kwargs):
     Create a 1D, 2D, or 3D convolution module.
     """
     if dims == 1:
-        return nn.Conv1d(*args, **kwargs)
+        return nn.Conv1D(*args, **kwargs)
     elif dims == 2:
-        return nn.Conv2d(*args, **kwargs)
+        return nn.Conv2D(*args, **kwargs)
     elif dims == 3:
-        return nn.Conv3d(*args, **kwargs)
+        return nn.Conv3D(*args, **kwargs)
     raise ValueError(f"unsupported dimensions: {dims}")
 
 
@@ -44,11 +42,11 @@ def avg_pool_nd(dims, *args, **kwargs):
     Create a 1D, 2D, or 3D average pooling module.
     """
     if dims == 1:
-        return nn.AvgPool1d(*args, **kwargs)
+        return nn.AvgPool1D(*args, **kwargs)
     elif dims == 2:
-        return nn.AvgPool2d(*args, **kwargs)
+        return nn.AvgPool2D(*args, **kwargs)
     elif dims == 3:
-        return nn.AvgPool3d(*args, **kwargs)
+        return nn.AvgPool3D(*args, **kwargs)
     raise ValueError(f"unsupported dimensions: {dims}")
 
 
@@ -62,7 +60,9 @@ def update_ema(target_params, source_params, rate=0.99):
     :param rate: the EMA rate (closer to 1 means slower).
     """
     for targ, src in zip(target_params, source_params):
-        targ.detach().mul_(rate).add_(src, alpha=1 - rate)
+        targ.detach().multiply_(y=paddle.to_tensor(rate)).add_(
+            y=paddle.to_tensor((1 - rate) * src)
+        )
 
 
 def zero_module(module):
@@ -79,7 +79,7 @@ def scale_module(module, scale):
     Scale the parameters of a module and return it.
     """
     for p in module.parameters():
-        p.detach().mul_(scale)
+        p.detach().multiply_(y=paddle.to_tensor(scale))
     return module
 
 
@@ -87,7 +87,7 @@ def mean_flat(tensor):
     """
     Take the mean over all non-batch dimensions.
     """
-    return tensor.mean(dim=list(range(1, len(tensor.shape))))
+    return tensor.mean(axis=list(range(1, len(tuple(tensor.shape)))))
 
 
 def normalization(channels):
@@ -111,13 +111,17 @@ def timestep_embedding(timesteps, dim, max_period=10000):
     :return: an [N x dim] Tensor of positional embeddings.
     """
     half = dim // 2
-    freqs = th.exp(
-        -math.log(max_period) * th.arange(start=0, end=half, dtype=th.float32) / half
-    ).to(device=timesteps.device)
-    args = timesteps[:, None].float() * freqs[None]
-    embedding = th.cat([th.cos(args), th.sin(args)], dim=-1)
+    freqs = paddle.exp(
+        x=-math.log(max_period)
+        * paddle.arange(start=0, end=half, dtype="float32")
+        / half
+    ).to(device=timesteps.place)
+    args = timesteps[:, None].astype(dtype="float32") * freqs[None]
+    embedding = paddle.concat(x=[paddle.cos(x=args), paddle.sin(x=args)], axis=-1)
     if dim % 2:
-        embedding = th.cat([embedding, th.zeros_like(embedding[:, :1])], dim=-1)
+        embedding = paddle.concat(
+            x=[embedding, paddle.zeros_like(x=embedding[:, :1])], axis=-1
+        )
     return embedding
 
 
@@ -139,29 +143,27 @@ def checkpoint(func, inputs, params, flag):
         return func(*inputs)
 
 
-class CheckpointFunction(th.autograd.Function):
+class CheckpointFunction(paddle.autograd.PyLayer):
     @staticmethod
     def forward(ctx, run_function, length, *args):
         ctx.run_function = run_function
         ctx.input_tensors = list(args[:length])
         ctx.input_params = list(args[length:])
-        with th.no_grad():
+        with paddle.no_grad():
             output_tensors = ctx.run_function(*ctx.input_tensors)
         return output_tensors
 
     @staticmethod
     def backward(ctx, *output_grads):
-        ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
-        with th.enable_grad():
-            # Fixes a bug where the first op in run_function modifies the
-            # Tensor storage in place, which is not allowed for detach()'d
-            # Tensors.
-            shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+        """Not Support auto convert *.requires_grad_, please judge whether it is Pytorch API and convert by yourself"""
+        ctx.input_tensors = [x.detach() for x in ctx.input_tensors]
+        with paddle.enable_grad():
+            shallow_copies = [x.view_as(other=x) for x in ctx.input_tensors]
             output_tensors = ctx.run_function(*shallow_copies)
-        input_grads = th.autograd.grad(
-            output_tensors,
-            ctx.input_tensors + ctx.input_params,
-            output_grads,
+        input_grads = paddle.grad(
+            outputs=output_tensors,
+            inputs=ctx.input_tensors + ctx.input_params,
+            grad_outputs=output_grads,
             allow_unused=True,
         )
         del ctx.input_tensors
