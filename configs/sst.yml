@@ -40,7 +40,7 @@ sampling:
     pretrained_model_path: /home/project/DDPG_paddle/sst_ddim.pdparams
     batch_size: 1
     T_sampling: 100
-    
+
 time_travel:
     T_sampling: 100
     travel_length: 1
