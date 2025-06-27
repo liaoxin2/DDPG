@@ -1,8 +1,8 @@
 import os
 import numpy as np
-from torch.utils.data import Dataset
+import paddle
 
-class SST(Dataset):
+class SST(paddle.io.Dataset):
     def __init__(self, directory, target_path, transform=None):
         self.data = np.load(directory)
 

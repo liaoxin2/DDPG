@@ -10,7 +10,7 @@ class_num = 951
 
 def compute_alpha(beta, t):
     beta = paddle.concat(x=[paddle.zeros(shape=[1]).to(beta.place), beta], axis=0)
-    a = (1 - beta).cumprod(dim=0).index_select(axis=0, index=t + 1).view(-1, 1, 1, 1)
+    a = (1 - beta).cumprod(dim=0).index_select(axis=0, index=t + 1).view([-1, 1, 1, 1])
     return a
 
 
@@ -55,14 +55,14 @@ def ddpg_diffusion(
                     eta_reg = 0.0001 + args.xi * (sigma_y * 255.0) ** 2
                 scale_gLS = args.scale_ls
                 guidance_BP = A_funcs.A_pinv_add_eta(
-                    A_funcs.A(x0_t.reshape(x0_t.shape[0], -1))
-                    - y.reshape(y.shape[0], -1),
+                    A_funcs.A(x0_t.reshape([x0_t.shape[0], -1]))
+                    - y.reshape([y.shape[0], -1]),
                     eta_reg,
-                ).reshape(*tuple(x0_t.shape))
+                ).reshape([*tuple(x0_t.shape)])
                 guidance_LS = A_funcs.At(
-                    A_funcs.A(x0_t.reshape(x0_t.shape[0], -1))
-                    - y.reshape(y.shape[0], -1)
-                ).reshape(*tuple(x0_t.shape))
+                    A_funcs.A(x0_t.reshape([x0_t.shape[0], -1]))
+                    - y.reshape([y.shape[0], -1])
+                ).reshape([*tuple(x0_t.shape)])
                 if args.step_size_mode == 0:
                     step_size_LS = 1
                     step_size_BP = 1

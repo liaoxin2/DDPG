@@ -8,7 +8,6 @@ import traceback
 import numpy as np
 import yaml
 from guided_diffusion.diffusion import Diffusion
-from paddle_utils import *
 
 import paddle
 
@@ -141,7 +140,6 @@ def parse_args_and_config():
     np.random.seed(args.seed)
     if paddle.device.cuda.device_count() >= 1:
         paddle.seed(seed=args.seed)
-    PaddleFlag.cudnn_benchmark = True
     return args, new_config, logger
 
 
