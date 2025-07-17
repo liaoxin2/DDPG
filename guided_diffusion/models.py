@@ -44,9 +44,14 @@ class Upsample(nn.Module):
                                         stride=1,
                                         padding=1)
 
-    def forward(self, x):
-        x = torch.nn.functional.interpolate(
-            x, scale_factor=2.0, mode="nearest")
+    def forward(self, x, output_size=None):
+        if output_size is not None:
+            x = torch.nn.functional.interpolate(
+                x, size=output_size, mode="nearest")
+        else:
+            x = torch.nn.functional.interpolate(
+                x, scale_factor=2.0, mode="nearest")
+        
         if self.with_conv:
             x = self.conv(x)
         return x
@@ -299,8 +304,6 @@ class Model(nn.Module):
                                         padding=1)
 
     def forward(self, x, t):
-        assert x.shape[2] == x.shape[3] == self.resolution
-
         # timestep embedding
         temb = get_timestep_embedding(t, self.ch)
         temb = self.temb.dense[0](temb)
@@ -325,6 +328,7 @@ class Model(nn.Module):
         h = self.mid.block_2(h, temb)
 
         # upsampling
+        output_size = [(550, 511), (275, 255), (137, 127),  (68, 63),  (34, 31)]
         for i_level in reversed(range(self.num_resolutions)):
             for i_block in range(self.num_res_blocks+1):
                 h = self.up[i_level].block[i_block](
@@ -332,7 +336,10 @@ class Model(nn.Module):
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
             if i_level != 0:
-                h = self.up[i_level].upsample(h)
+                if self.config.data.dataset == 'sst':
+                    h = self.up[i_level].upsample(h, output_size[i_level-1])
+                else:
+                    h = self.up[i_level].upsample(h)
 
         # end
         h = self.norm_out(h)

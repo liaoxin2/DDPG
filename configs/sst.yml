@@ -1,0 +1,46 @@
+data:
+    dataset: "sst"
+    category: ""
+    image_lat: 550
+    image_lon: 511
+    image_size: 64
+    channels: 1
+    logit_transform: false
+    uniform_dequantization: false
+    gaussian_dequantization: false
+    random_flip: true
+    rescaled: true
+    num_workers: 1
+    out_of_dist: false
+    data_directory: /public/home/huanggang/Baidu/DDPG/sst_test_20241216.npy
+    #data_directory: /workspace/workspace/DDNM/sst_test1.npy
+
+model:
+    type: "simple"
+    in_channels: 1
+    out_ch: 1
+    ch: 128
+    ch_mult: [1, 2, 2, 2, 4]
+    num_res_blocks: 2
+    attn_resolutions: [16, ]
+    dropout: 0.0
+    var_type: fixedlarge
+    ema_rate: 0.999
+    ema: True
+    resamp_with_conv: True
+
+diffusion:
+    beta_schedule: linear
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000
+
+sampling:
+    pretrained_model_path: /public/home/huanggang/Baidu/DDPG/ckpt_890000.pth
+    batch_size: 1
+    T_sampling: 100
+    
+time_travel:
+    T_sampling: 100
+    travel_length: 1
+    travel_repeat: 1

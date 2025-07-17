@@ -553,6 +553,113 @@ class SRConv(A_functions):
         return temp
 
 
+class SRConv_NonSquare(A_functions):
+    def mat_by_img(self, M, v, height, width):
+        return torch.matmul(M, v.reshape(v.shape[0] * self.channels, height, width)).reshape(v.shape[0], self.channels, M.shape[0], width)
+
+    def img_by_mat(self, v, M, height, width):
+        return torch.matmul(v.reshape(v.shape[0] * self.channels, height, width), M).reshape(v.shape[0], self.channels, height, M.shape[1])
+
+    def __init__(self, kernel, channels, img_height, img_width, device, stride=1):
+        self.img_height = img_height
+        self.img_width = img_width
+        self.channels = channels
+        self.ratio = stride
+        small_height = img_height // stride
+        small_width = img_width // stride
+        self.small_height = small_height
+        self.small_width = small_width
+
+        # Build 1D conv matrix for height
+        A_small_h = torch.zeros(small_height, img_height, device=device)
+        for i in range(stride // 2, img_height + stride // 2, stride):
+            if i // stride >= small_height: break
+            for j in range(i - kernel.shape[0] // 2, i + kernel.shape[0] // 2):
+                j_effective = j
+                # Reflective padding
+                if j_effective < 0: j_effective = -j_effective - 1
+                if j_effective >= img_height: j_effective = (img_height - 1) - (j_effective - img_height)
+                # Matrix building
+                A_small_h[i // stride, j_effective] += kernel[j - i + kernel.shape[0] // 2]
+        
+        # Build 1D conv matrix for width
+        A_small_w = torch.zeros(small_width, img_width, device=device)
+        for i in range(stride // 2, img_width + stride // 2, stride):
+            if i // stride >= small_width: break
+            for j in range(i - kernel.shape[0] // 2, i + kernel.shape[0] // 2):
+                j_effective = j
+                # Reflective padding
+                if j_effective < 0: j_effective = -j_effective - 1
+                if j_effective >= img_width: j_effective = (img_width - 1) - (j_effective - img_width)
+                # Matrix building
+                A_small_w[i // stride, j_effective] += kernel[j - i + kernel.shape[0] // 2]
+
+        # Get the SVD of the 1D conv matrices
+        self.U_small_h, self.singulars_small_h, self.V_small_h = torch.svd(A_small_h, some=False)
+        self.U_small_w, self.singulars_small_w, self.V_small_w = torch.svd(A_small_w, some=False)
+
+        ZERO = 3e-2
+        self.singulars_small_h[self.singulars_small_h < ZERO] = 0
+        self.singulars_small_w[self.singulars_small_w < ZERO] = 0
+
+        # Calculate the singular values of the big matrix
+        self._singulars = torch.matmul(self.singulars_small_h.reshape(small_height, 1), self.singulars_small_w.reshape(1, small_width)).reshape(small_height * small_width)
+
+        # Permutation for matching the singular values
+        self._perm = torch.Tensor([
+            self.img_width * i + j for i in range(self.small_height) for j in range(self.small_width)
+        ] + [
+            self.img_width * i + j for i in range(self.small_height) for j in range(self.small_width, self.img_width)
+        ]).to(device).long()
+
+    def V(self, vec):
+        # Invert the permutation
+        temp = torch.zeros(vec.shape[0], self.img_height * self.img_width, self.channels, device=vec.device)
+        temp[:, self._perm, :] = vec.clone().reshape(vec.shape[0], self.img_height * self.img_width, self.channels)[:, :self._perm.shape[0], :]
+        temp[:, self._perm.shape[0]:, :] = vec.clone().reshape(vec.shape[0], self.img_height * self.img_width, self.channels)[:, self._perm.shape[0]:, :]
+        temp = temp.permute(0, 2, 1)
+        # Multiply the image by V from the left and by V^T from the right
+        out = self.mat_by_img(self.V_small_h, temp, self.img_height, self.img_width)
+        out = self.img_by_mat(out, self.V_small_w.transpose(0, 1), self.img_height, self.img_width).reshape(vec.shape[0], -1)
+        return out
+
+    def Vt(self, vec):
+        # Multiply the image by V^T from the left and by V from the right
+        temp = self.mat_by_img(self.V_small_h.transpose(0, 1), vec.clone(), self.img_height, self.img_width)
+        temp = self.img_by_mat(temp, self.V_small_w, self.img_height, self.img_width).reshape(vec.shape[0], self.channels, -1)
+        # Permute the entries
+        temp[:, :, :self._perm.shape[0]] = temp[:, :, self._perm]
+        temp = temp.permute(0, 2, 1)
+        return temp.reshape(vec.shape[0], -1)
+
+    def U(self, vec):
+        # Invert the permutation
+        temp = torch.zeros(vec.shape[0], self.small_height * self.small_width, self.channels, device=vec.device)
+        temp[:, :self.small_height * self.small_width, :] = vec.clone().reshape(vec.shape[0], self.small_height * self.small_width, self.channels)
+        temp = temp.permute(0, 2, 1)
+        # Multiply the image by U from the left and by U^T from the right
+        out = self.mat_by_img(self.U_small_h, temp, self.small_height, self.small_width)
+        out = self.img_by_mat(out, self.U_small_w.transpose(0, 1), self.small_height, self.small_width).reshape(vec.shape[0], -1)
+        return out
+
+    def Ut(self, vec):
+        # Multiply the image by U^T from the left and by U from the right
+        temp = self.mat_by_img(self.U_small_h.transpose(0, 1), vec.clone(), self.small_height, self.small_width)
+        temp = self.img_by_mat(temp, self.U_small_w, self.small_height, self.small_width).reshape(vec.shape[0], self.channels, -1)
+        # Permute the entries
+        temp = temp.permute(0, 2, 1)
+        return temp.reshape(vec.shape[0], -1)
+
+    def singulars(self):
+        return self._singulars.repeat_interleave(self.channels).reshape(-1)
+
+    def add_zeros(self, vec):
+        reshaped = vec.clone().reshape(vec.shape[0], -1)
+        temp = torch.zeros((vec.shape[0], self.img_height * self.img_width), device=vec.device)
+        temp[:, :reshaped.shape[1]] = reshaped
+        return temp
+
+
 
 #Deblurring
 class Deblurring(A_functions):

@@ -17,11 +17,12 @@ import torchvision.utils as tvu
 from guided_diffusion.models import Model
 from guided_diffusion.script_util import create_model, create_classifier, classifier_defaults, args_to_dict
 import random
+import matplotlib.pyplot as plt
 
-import lpips
+# import lpips
 
 
-loss_fn_alex = lpips.LPIPS(net='alex') # net='alex' best forward scores
+# loss_fn_alex = lpips.LPIPS(net='alex') # net='alex' best forward scores
 
 
 def get_gaussian_noisy_img(img, noise_level):
@@ -126,22 +127,32 @@ class Diffusion(object):
                 name = f"lsun_{self.config.data.category}"
             elif self.config.data.dataset == 'CelebA_HQ':
                 name = 'celeba_hq'
+            elif self.config.data.dataset == 'sst':
+                name = 'sst'
             else:
                 raise ValueError
-            if name != 'celeba_hq':
+            if name != 'celeba_hq' and name != 'sst':
                 ckpt = get_ckpt_path(f"ema_{name}", prefix=self.args.exp)
                 print("Loading checkpoint {}".format(ckpt))
             elif name == 'celeba_hq':
                 ckpt = os.path.join(self.args.exp, "logs/celeba/celeba_hq.ckpt")
                 if not os.path.exists(ckpt):
-                    raise ValueError("CelebA-HQ model checkpoint not found, please download it as mentioned in README.md"
-                                     " file and configure the correct path")
-                    # download('https://image-editing-test-12345.s3-us-west-2.amazonaws.com/checkpoints/celeba_hq.ckpt',ckpt)
+                    download('https://image-editing-test-12345.s3-us-west-2.amazonaws.com/checkpoints/celeba_hq.ckpt',
+                             ckpt)
+            elif name == 'sst':
+                states = torch.load(self.config.sampling.pretrained_model_path, map_location=self.config.device)
+                model = model.to(self.device)
+                model = torch.nn.DataParallel(model)
+                model.load_state_dict(states[0], strict=True)
             else:
                 raise ValueError
-            model.load_state_dict(torch.load(ckpt, map_location=self.device))
-            model.to(self.device)
-            model = torch.nn.DataParallel(model)
+            
+            if name != 'sst':
+                print('name',name)
+                model.load_state_dict(torch.load(ckpt, map_location=self.device))
+                model.to(self.device)
+                model = torch.nn.DataParallel(model)
+
 
         elif self.config.model.type == 'openai':
             config_dict = vars(self.config.model)
@@ -244,7 +255,7 @@ class Diffusion(object):
         val_loader = data.DataLoader(
             test_dataset,
             batch_size=config.sampling.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=config.data.num_workers,
             worker_init_fn=seed_worker,
             generator=g,
@@ -302,8 +313,8 @@ class Diffusion(object):
             kernel = torch.from_numpy(k).float().to(self.device)
             
             if args.operator_imp == 'SVD':
-                from functions.svd_operators import SRConv
-                A_funcs = SRConv(kernel / kernel.sum(), config.data.channels, self.config.data.image_size, self.device, stride=factor)
+                from functions.svd_operators import SRConv, SRConv_NonSquare
+                A_funcs = SRConv_NonSquare(kernel / kernel.sum(), config.data.channels, self.config.data.image_lat, self.config.data.image_lon, self.device, stride=factor)
             elif args.operator_imp == 'FFT':                
                 from functions.fft_operators import Superres_fft, prepare_cubic_filter
                 k = prepare_cubic_filter(1/factor)
@@ -377,7 +388,13 @@ class Diffusion(object):
         idx_so_far = args.subset_start
         avg_psnr = 0.0
         avg_lpips = 0.0
+        avg_rmse_pred = 0.0
+        avg_rmes_orig = 0.0
         pbar = tqdm.tqdm(val_loader)
+        psnr_list = []
+        orig_list = []
+        data_list = []
+
 
         img_ind = -1
 
@@ -393,7 +410,9 @@ class Diffusion(object):
                 np.random.seed(seed=args.seed) # Back to original seed for reproducibility
 
             x_orig = x_orig.to(self.device)
+            classes = classes.to(self.device)
             x_orig = data_transform(self.config, x_orig)
+            classes = data_transform(self.config, classes)
 
             y = A_funcs.A(x_orig)
             
@@ -407,41 +426,65 @@ class Diffusion(object):
             elif 'inp' in deg or 'cs' in deg:
                 pass
             else:
-                hw = hwc / 3
-                h = w = int(hw ** 0.5)
-                y = y.reshape((b, 3, h, w))
+                y = y.reshape((b, 1, 68, 63))
             
             y = y.reshape((b, hwc))
 
-            Apy = A_funcs.A_pinv_add_eta(y, max(1e-4, sigma_y**2 * args.eta_tilde )).view(y.shape[0], config.data.channels, self.config.data.image_size,
-                                                self.config.data.image_size)
+            Apy = A_funcs.A_pinv_add_eta(y, max(1e-4, sigma_y**2 * args.eta_tilde )).view(y.shape[0], config.data.channels, self.config.data.image_lat,
+                                                self.config.data.image_lon)
             
 
-            if args.save_observed_img:
-                os.makedirs(os.path.join(self.args.image_folder, "Apy"), exist_ok=True)
-                for i in range(len(Apy)):
+            os.makedirs(os.path.join(self.args.image_folder, "Apy"), exist_ok=True)
+            for i in range(len(Apy)):
+                Apy_i = inverse_data_transform(config, y[i].reshape((b, 1, 68, 63)))
+                if Apy_i.shape[0] == 1:
+                    Apy_i = Apy_i*(35.666367+2.0826182)-2.0826182
+                    input_np = Apy_i.squeeze().cpu().numpy()  
+                    plt.imshow(input_np, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("Coarse-resolution sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"Apy/y_{idx_so_far + i}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+                else:
                     tvu.save_image(
-                        inverse_data_transform(config, Apy[i]),
+                        Apy_i,
                         os.path.join(self.args.image_folder, f"Apy/Apy_{idx_so_far + i}.png")
                     )
+                x_orig_i = inverse_data_transform(config, x_orig[i])
+                if x_orig_i.shape[0] == 1:
+                    x_orig_i = x_orig_i*(35.666367+2.0826182)-2.0826182
+                    input_np = x_orig_i.squeeze().cpu().numpy()  
+                    plt.imshow(input_np, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("High-resolution true sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"Apy/orig_{idx_so_far + i}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+                else:
                     tvu.save_image(
-                        inverse_data_transform(config, x_orig[i]),
+                        x_orig_i,
                         os.path.join(self.args.image_folder, f"Apy/orig_{idx_so_far + i}.png")
                     )
-                    if 'inp' in deg or 'cs' in deg:
-                        pass
-                    else:
-                        tvu.save_image(
-                            inverse_data_transform(config, y[i].reshape((3, h, w))),
-                            os.path.join(self.args.image_folder, f"Apy/y_{idx_so_far + i}.png")
-                        )
+                x_orig_i = inverse_data_transform(config, classes[i])
+                if x_orig_i.shape[0] == 1:
+                    x_orig_i = x_orig_i*(35.666367+2.0826182)-2.0826182
+                    input_np = x_orig_i.squeeze().cpu().numpy()  
+                    plt.imshow(input_np, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("High-resolution true sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"Apy/true_{idx_so_far + i}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+                else:
+                    tvu.save_image(
+                        x_orig_i,
+                        os.path.join(self.args.image_folder, f"Apy/orig_{idx_so_far + i}.png")
+                    )
 
             # initialize x
             x = torch.randn(
                 y.shape[0],
                 config.data.channels,
-                config.data.image_size,
-                config.data.image_size,
+                config.data.image_lat,
+                config.data.image_lon,
                 device=self.device,
             )
 
@@ -450,26 +493,85 @@ class Diffusion(object):
                 
                 #x, _ = ddpg_diffusion_tom(x, model, self.betas, A_funcs, y, sigma_y, cls_fn=cls_fn, classes=classes, config=config, args=args)
 
-
-            lpips_final = torch.squeeze(loss_fn_alex(x[0], x_orig.to('cpu'))).detach().numpy()
+            lpips_final = 0 #torch.squeeze(loss_fn_alex(x[0], x_orig.to('cpu'))).detach().numpy()
             avg_lpips += lpips_final
 
             x = [inverse_data_transform(config, xi) for xi in x]
-
+            
             for j in range(x[0].size(0)):
-                tvu.save_image(
-                    x[0][j], os.path.join(self.args.image_folder, f"{idx_so_far + j}_{0}.png")
-                )
+                if x[0][j].shape[0] == 1:
+                    x_pred = x[0][j]*(35.666367+2.0826182)-2.0826182
+                    input_np = x_pred.squeeze().cpu().numpy()  
+                    data_list.append(input_np)
+                    plt.imshow(input_np, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("High-resolution predicted sea surface temperatures")
+                    plt.savefig(os.path.join(self.args.image_folder, f"{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+                    orig = inverse_data_transform(config, classes[0])
+                    orig = orig*(35.666367+2.0826182)-2.0826182
+                    orig_np = orig.squeeze().cpu().numpy()  
+                    error = np.abs(orig_np-input_np)
+                    plt.imshow(error, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("Absolute error of sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"error_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+  
+                    yubao = inverse_data_transform(config, x_orig[0])
+                    yubao = yubao*(35.666367+2.0826182)-2.0826182
+                    yubao_np = yubao.squeeze().cpu().numpy()  
+                    error = np.abs(orig_np-yubao_np)
+                    plt.imshow(error, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("Absolute error of sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"error_yubao_guance_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+
+                    error = np.abs(yubao_np-input_np)
+                    plt.imshow(error, cmap='hot')
+                    plt.colorbar(label='sst')
+                    plt.title("Absolute error of sea surface temperature")
+                    plt.savefig(os.path.join(self.args.image_folder, f"error_yubao_pred_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.close()
+                else:
+                    tvu.save_image(
+                        x[0][j], os.path.join(self.args.image_folder, f"{idx_so_far + j}_{0}.png")
+                    )
                 orig = inverse_data_transform(config, x_orig[j])
-                mse = torch.mean((x[0][j].to(self.device) - orig) ** 2)
+                classes = inverse_data_transform(config, classes[j])
+                orig = orig*(35.666367+2.0826182)-2.0826182
+                classes = classes*(35.666367+2.0826182)-2.0826182
+
+                mse = torch.mean((x_pred.to(self.device) - classes) ** 2)
+
+                rmse_pred = torch.sqrt(mse)
+                rmes_orig = torch.sqrt(torch.mean((orig - classes) ** 2))
+
                 psnr = 10 * torch.log10(1 / mse)
                 logger.info("img_ind: %d, PSNR: %.2f, LPIPS: %.4f" % (img_ind, psnr, lpips_final))
+                logger.info("img_ind: %d, RMSE of predicted: %.4f" % (img_ind, rmse_pred))
+                logger.info("img_ind: %d, RMSE of original: %.4f" % (img_ind, rmes_orig))
+                psnr_list.append(rmse_pred.cpu().numpy().item())
+                orig_list.append(rmes_orig.cpu().numpy().item())
                 avg_psnr += psnr
+                avg_rmse_pred += rmse_pred
+                avg_rmes_orig += rmes_orig
 
             idx_so_far += y.shape[0]
 
             #pbar.set_description("Avg PSNR: %.2f, Avg LPIPS: %.4f     (** After %d iteration **)" % (avg_psnr / (idx_so_far - idx_init), avg_lpips / (idx_so_far - idx_init), idx_so_far - idx_init))
             logger.info("Avg PSNR: %.2f, Avg LPIPS: %.4f     (** After %d iteration **)" % (avg_psnr / (idx_so_far - idx_init), avg_lpips / (idx_so_far - idx_init), idx_so_far - idx_init))
+            logger.info("Avg RMSE of predicted: %.4f" % (avg_rmse_pred / (idx_so_far - idx_init)))
+            logger.info("Avg RMSE of original: %.4f" % (avg_rmes_orig / (idx_so_far - idx_init)))
+
+        pred_data = np.stack(data_list, axis=0)
+        # print('sst_data',sst_data.shape)
+        print('pred_data',pred_data.shape)
+        np.save(os.path.join(self.args.image_folder, "DDPG_8x_000.npy"), pred_data)
+        print('psnr_list',psnr_list)
+        print('orig_list',orig_list)
+
 
 
         avg_psnr = avg_psnr / (idx_so_far - idx_init)

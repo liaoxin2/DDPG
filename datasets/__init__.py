@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 from datasets.celeba import CelebA
 from datasets.lsun import LSUN
+from datasets.sst import SST
 from torch.utils.data import Subset
 import numpy as np
 import torchvision
@@ -187,6 +188,17 @@ def get_dataset(args, config):
                 transforms.ToTensor()])
             )
             test_dataset = dataset
+    elif config.data.dataset == "sst":
+        dataset = SST(directory=config.data.data_directory)
+        num_items = len(dataset)
+        indices = list(range(num_items))
+        random_state = np.random.get_state()
+        train_indices, test_indices = (
+            indices[: int(num_items * 0.97)],
+            indices[int(num_items * 0.97) :],
+        )
+        test_dataset = dataset
+        dataset = Subset(dataset, train_indices)
     else:
         dataset, test_dataset = None, None
 
