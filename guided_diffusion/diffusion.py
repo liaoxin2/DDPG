@@ -114,7 +114,7 @@ class Diffusion(object):
         self.config = config
         if device is None:
             device = (
-                str("cuda").replace("cuda", "gpu")
+                str("cuda").replace("cuda", "gpu:0")
                 if paddle.device.cuda.device_count() >= 1
                 else paddle.CPUPlace()
             )
@@ -306,19 +306,22 @@ class Diffusion(object):
                 config.data.channels, self.config.data.image_size, cs_ratio, self.device
             )
         elif deg == "inpainting":
-            from functions.svd_operators import Inpainting
+            if self.config.data.dataset == "sst":
+                pass
+            else:
+                from functions.svd_operators import Inpainting
 
-            loaded = np.load("exp/inp_masks/mask.npy")
-            mask = paddle.to_tensor(data=loaded).to(self.device).reshape(-1)
-            missing_r = (
-                paddle.nonzero(x=mask == 0).astype(dtype="int64").reshape(-1) * 3
-            )
-            missing_g = missing_r + 1
-            missing_b = missing_g + 1
-            missing = paddle.concat(x=[missing_r, missing_g, missing_b], axis=0)
-            A_funcs = Inpainting(
-                config.data.channels, config.data.image_size, missing, self.device
-            )
+                loaded = np.load("exp/inp_masks/mask.npy")
+                mask = paddle.to_tensor(data=loaded).to(self.device).reshape(-1)
+                missing_r = (
+                    paddle.nonzero(x=mask == 0).astype(dtype="int64").reshape(-1) * 3
+                )
+                missing_g = missing_r + 1
+                missing_b = missing_g + 1
+                missing = paddle.concat(x=[missing_r, missing_g, missing_b], axis=0)
+                A_funcs = Inpainting(
+                    config.data.channels, config.data.image_size, missing, self.device
+                )
         elif deg == "denoising":
             from functions.svd_operators import Denoising
 
@@ -519,6 +522,7 @@ class Diffusion(object):
         idx_so_far = args.subset_start
         avg_psnr = 0.0
         avg_lpips = 0.0
+        psnr_list = []
         pbar = tqdm.tqdm(enumerate(val_loader))
         img_ind = -1
         for classes, x_orig in pbar:
@@ -538,6 +542,12 @@ class Diffusion(object):
             if self.config.data.dataset == "sst":
                 target = x_orig[1].to(self.device)
                 target = data_transform(self.config, target)
+                if deg == 'inpainting':
+                    from functions.svd_operators import Inpainting_sst
+                    mask = x_orig[0].reshape([-1])
+                    missing = set(i for i, val in enumerate(mask) if val == 0)
+                    A_funcs = Inpainting_sst(config.data.channels, config.data.image_lat, config.data.image_lon, missing, self.device)
+
             x_orig = x_orig[0].to(self.device)
             x_orig = data_transform(self.config, x_orig)
             
@@ -572,6 +582,8 @@ class Diffusion(object):
                     self.config.data.image_lat,
                     self.config.data.image_lon]
                 )
+                if deg == 'inpainting':
+                    Apy += A_funcs.A_pinv(A_funcs.A(paddle.ones_like(Apy))).reshape([*Apy.shape]) - 1
             else:
                 Apy = A_funcs.A_pinv_add_eta(
                     y, max(0.0001, sigma_y**2 * args.eta_tilde)
@@ -581,11 +593,14 @@ class Diffusion(object):
                     self.config.data.image_size,
                     self.config.data.image_size]
                 )
-            if args.save_observed_img:                 
+            if True:                 
                 os.makedirs(os.path.join(self.args.image_folder, "Apy"), exist_ok=True)
                 for i in range(len(Apy)):
                     if self.config.data.dataset == "sst":
-                        save_sst_images(config, args, y[i].reshape([b, 1, int(h), int(w)]), f"Apy/y_{idx_so_far + i}.png", 'Downsample the forecasted sea surface temperature by a factor of 16')
+                        if deg == 'inpainting': 
+                            save_sst_images(config, args, Apy[i], f"Apy/Apy_{idx_so_far + i}.png", 'Sea surface temperature station data')
+                        else:
+                            save_sst_images(config, args, y[i].reshape([b, 1, int(h), int(w)]), f"Apy/y_{idx_so_far + i}.png", 'Downsample the forecasted sea surface temperature by a factor of 16')
                         save_sst_images(config, args, x_orig[i], f"Apy/orig_{idx_so_far + i}.png", 'Forecasted sea surface temperature')
                         save_sst_images(config, args, target[i], f"Apy/traget_{idx_so_far + i}.png", 'Observed sea surface temperature')
                     else:
@@ -692,12 +707,15 @@ class Diffusion(object):
                     target = inverse_data_transform(config, target[j])
                 else:
                     target = inverse_data_transform(config, x_orig[j])
-                mse = paddle.mean(x=(x[0][j].to(self.device) - target) ** 2)
+                target = target*(35.666367+2.0826182)-2.0826182
+                mse = paddle.mean(x=(x_pred - target) ** 2)
                 psnr = 10 * paddle.log10(x=1 / mse)
                 logger.info(
                     "img_ind: %d, PSNR: %.2f, LPIPS: %.4f"
                     % (img_ind, psnr, lpips_final)
                 )
+                rmse_pred = paddle.sqrt(mse)
+                psnr_list.append(rmse_pred.cpu().numpy().item())
                 avg_psnr += psnr
             idx_so_far += tuple(y.shape)[0]
             logger.info(
@@ -710,6 +728,7 @@ class Diffusion(object):
             )
         avg_psnr = avg_psnr / (idx_so_far - idx_init)
         avg_lpips = avg_lpips / (idx_so_far - idx_init)
+        print('psnr_list',psnr_list)
         print("Total Average PSNR: %.2f" % avg_psnr)
         print("Total Average LPIPS: %.4f" % avg_lpips)
         print("Number of samples: %d" % (idx_so_far - idx_init))

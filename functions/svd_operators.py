@@ -365,6 +365,66 @@ class Inpainting(A_functions):
         return temp
 
 
+class Inpainting_sst(A_functions):
+    def __init__(self, channels, img_lat, img_lon, missing_indices, device):
+        self.channels = channels
+        self.img_lat = img_lat
+        self.img_lon = img_lon
+        self._singulars = paddle.ones(
+            shape=channels * img_lat * img_lon - len(missing_indices)
+        ).to(device)
+        self.missing_indices = missing_indices
+
+        self.kept_indices = (
+            paddle.to_tensor(
+                [i for i in range(channels * img_lat * img_lon) if i not in missing_indices],
+                dtype="float32",
+            )
+            .to(device)
+            .astype(dtype="int64")
+        )
+
+    def V(self, vec):
+        temp = vec.clone().reshape([vec.shape[0], -1])
+        out = paddle.zeros_like(x=temp)
+        out[:, self.kept_indices] = temp[:, : tuple(self.kept_indices.shape)[0]]
+        out[:, list(self.missing_indices)] = temp[:, tuple(self.kept_indices.shape)[0] :]
+        return (
+            out.reshape([vec.shape[0], -1, self.channels])
+            .transpose(perm=[0, 2, 1])
+            .reshape([vec.shape[0], -1])
+        )
+
+    def Vt(self, vec):
+        temp = (
+            vec.clone()
+            .reshape([vec.shape[0], self.channels, -1])
+            .transpose(perm=[0, 2, 1])
+            .reshape([vec.shape[0], -1])
+        )
+        out = paddle.zeros_like(x=temp)
+        out[:, : tuple(self.kept_indices.shape)[0]] = temp[:, self.kept_indices]
+        out[:, tuple(self.kept_indices.shape)[0] :] = temp[:, list(self.missing_indices)]
+        return out
+
+    def U(self, vec):
+        return vec.clone().reshape([vec.shape[0], -1])
+
+    def Ut(self, vec):
+        return vec.clone().reshape([vec.shape[0], -1])
+
+    def singulars(self):
+        return self._singulars
+
+    def add_zeros(self, vec):
+        temp = paddle.zeros(
+            shape=(tuple(vec.shape)[0], self.channels * self.img_lat * self.img_lon)
+        )
+        reshaped = vec.clone().reshape([vec.shape[0], -1])
+        temp[:, : tuple(reshaped.shape)[1]] = reshaped
+        return temp
+
+
 class Denoising(A_functions):
     def __init__(self, channels, img_dim, device):
         self._singulars = paddle.ones(shape=channels * img_dim**2)

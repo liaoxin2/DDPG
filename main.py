@@ -130,7 +130,7 @@ def parse_args_and_config():
     for arg, value in sorted(vars(args).items()):
         logger.info("Argument %s: %r", arg, value)
     device = (
-        str("cuda").replace("cuda", "gpu")
+        str("cuda").replace("cuda", "gpu:0")
         if paddle.device.cuda.device_count() >= 1
         else paddle.CPUPlace()
     )
