@@ -791,7 +791,7 @@ class SRConv(A_functions):
 class SRConv_NonSquare(A_functions):
     def mat_by_img(self, M, v, height, width):
         # Reshape the input tensor to flatten spatial dimensions
-        v_reshaped = v.reshape([v.shape[0]*self.channels, height, width]) 
+        v_reshaped = v.reshape([v.shape[0]*self.channels, height, width])
         result = paddle.matmul(M, v_reshaped)
         return result.reshape([v.shape[0], self.channels, M.shape[0], width])
 
@@ -800,7 +800,7 @@ class SRConv_NonSquare(A_functions):
         v_flat = v.reshape([v.shape[0]*self.channels, height, width])
         result = paddle.matmul(v_flat, M)
         return result.reshape([v.shape[0], self.channels, height, M.shape[1]])
-        
+
     def __init__(self, kernel, channels, img_height, img_width, device, stride=1):
         self.img_height = img_height
         self.img_width = img_width

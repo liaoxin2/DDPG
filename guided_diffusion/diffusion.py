@@ -1,24 +1,28 @@
-import glob
-import logging
 import os
 import random
-import time
 
-#import lpips
+import matplotlib.pyplot as plt
+
+# import lpips
 import numpy as np
+import paddle
 import tqdm
 from PIL import Image
 
-import paddle
-from datasets import get_dataset, data_transform, inverse_data_transform
-from functions.ckpt_util import download, get_ckpt_path
+from datasets import data_transform
+from datasets import get_dataset
+from datasets import inverse_data_transform
+from functions.ckpt_util import download
+from functions.ckpt_util import get_ckpt_path
 from functions.ddpg_scheme import ddpg_diffusion
 from guided_diffusion.models import Model
-from guided_diffusion.script_util import (args_to_dict, classifier_defaults,
-                                          create_classifier, create_model)
-import matplotlib.pyplot as plt
+from guided_diffusion.script_util import args_to_dict
+from guided_diffusion.script_util import classifier_defaults
+from guided_diffusion.script_util import create_classifier
+from guided_diffusion.script_util import create_model
 
-#loss_fn_alex = lpips.LPIPS(net="alex")
+
+# loss_fn_alex = lpips.LPIPS(net="alex")
 
 
 def save_image(tensor, filename):
@@ -36,28 +40,22 @@ def save_image(tensor, filename):
 
 def save_sst_images(config, args, imgs, filename, title):
     imgs = inverse_data_transform(config, imgs)
-    imgs = imgs*(35.666367+2.0826182)-2.0826182
+    imgs = imgs * (35.666367 + 2.0826182) - 2.0826182
     input_np = imgs.squeeze().cpu().numpy()
-    plt.imshow(input_np, cmap='hot')
-    plt.colorbar(label='sst')
+    plt.imshow(input_np, cmap="hot")
+    plt.colorbar(label="sst")
     plt.title(title)
-    plt.savefig(os.path.join(args.image_folder, filename), bbox_inches='tight', dpi=300)
+    plt.savefig(os.path.join(args.image_folder, filename), bbox_inches="tight", dpi=300)
     plt.close()
 
-                         
+
 def get_gaussian_noisy_img(img, noise_level):
-    return (
-        img
-        + paddle.randn(shape=img.shape, dtype=img.dtype).cuda(blocking=True)
-        * noise_level
-    )
+    return img + paddle.randn(shape=img.shape, dtype=img.dtype).cuda(blocking=True) * noise_level
 
 
 def MeanUpsample(x, scale):
     n, c, h, w = tuple(x.shape)
-    out = paddle.zeros(shape=[n, c, h, scale, w, scale]).to(x.place) + x.view(
-        n, c, h, 1, w, 1
-    )
+    out = paddle.zeros(shape=[n, c, h, scale, w, scale]).to(x.place) + x.view(n, c, h, 1, w, 1)
     out = out.view(n, c, scale * h, scale * w)
     return out
 
@@ -90,15 +88,11 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
             ** 2
         )
     elif beta_schedule == "linear":
-        betas = np.linspace(
-            beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64
-        )
+        betas = np.linspace(beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64)
     elif beta_schedule == "const":
         betas = beta_end * np.ones(num_diffusion_timesteps, dtype=np.float64)
     elif beta_schedule == "jsd":
-        betas = 1.0 / np.linspace(
-            num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
-        )
+        betas = 1.0 / np.linspace(num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64)
     elif beta_schedule == "sigmoid":
         betas = np.linspace(-6, 6, num_diffusion_timesteps)
         betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
@@ -114,9 +108,7 @@ class Diffusion(object):
         self.config = config
         if device is None:
             device = (
-                str("cuda").replace("cuda", "gpu:0")
-                if paddle.device.cuda.device_count() >= 1
-                else paddle.CPUPlace()
+                str("cuda").replace("cuda", "gpu:0") if paddle.device.cuda.device_count() >= 1 else paddle.CPUPlace()
             )
         self.device = device
         self.model_var_type = config.model.var_type
@@ -126,19 +118,13 @@ class Diffusion(object):
             beta_end=config.diffusion.beta_end,
             num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
         )
-        betas = self.betas = (
-            paddle.to_tensor(data=betas).astype(dtype="float32").to(self.device)
-        )
+        betas = self.betas = paddle.to_tensor(data=betas).astype(dtype="float32").to(self.device)
         self.num_timesteps = tuple(betas.shape)[0]
         alphas = 1.0 - betas
         alphas_cumprod = alphas.cumprod(dim=0)
-        alphas_cumprod_prev = paddle.concat(
-            x=[paddle.ones(shape=[1]).to(device), alphas_cumprod[:-1]], axis=0
-        )
+        alphas_cumprod_prev = paddle.concat(x=[paddle.ones(shape=[1]).to(device), alphas_cumprod[:-1]], axis=0)
         self.alphas_cumprod_prev = alphas_cumprod_prev
-        posterior_variance = (
-            betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
-        )
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         if self.model_var_type == "fixedlarge":
             self.logvar = betas.log()
         elif self.model_var_type == "fixedsmall":
@@ -158,7 +144,7 @@ class Diffusion(object):
                 name = "sst"
             else:
                 raise ValueError
-            if name != "celeba_hq" and name != 'sst':
+            if name != "celeba_hq" and name != "sst":
                 ckpt = get_ckpt_path(f"ema_{name}", prefix=self.args.exp)
                 print("Loading checkpoint {}".format(ckpt))
             elif name == "celeba_hq":
@@ -167,7 +153,7 @@ class Diffusion(object):
                     raise ValueError(
                         "CelebA-HQ model checkpoint not found, please download it as mentioned in README.md file and configure the correct path"
                     )
-            elif name == 'sst':
+            elif name == "sst":
                 ckpt = self.config.sampling.pretrained_model_path
             else:
                 raise ValueError
@@ -182,17 +168,14 @@ class Diffusion(object):
             if self.config.model.class_cond:
                 ckpt = os.path.join(
                     self.args.exp,
-                    "logs/imagenet/%dx%d_diffusion.pt"
-                    % (self.config.data.image_size, self.config.data.image_size),
+                    "logs/imagenet/%dx%d_diffusion.pt" % (self.config.data.image_size, self.config.data.image_size),
                 )
                 if not os.path.exists(ckpt):
                     raise ValueError(
                         "ImageNet model checkpoint not found, please download it as mentioned in README.md file and configure the correct path"
                     )
             else:
-                ckpt = os.path.join(
-                    self.args.exp, "logs/imagenet/256x256_diffusion_uncond.pt"
-                )
+                ckpt = os.path.join(self.args.exp, "logs/imagenet/256x256_diffusion_uncond.pt")
                 if not os.path.exists(ckpt):
                     raise ValueError(
                         "ImageNet model checkpoint not found, please download it as mentioned in README.md file and configure the correct path"
@@ -204,8 +187,7 @@ class Diffusion(object):
             if self.config.model.class_cond:
                 ckpt = os.path.join(
                     self.args.exp,
-                    "logs/imagenet/%dx%d_classifier.pt"
-                    % (self.config.data.image_size, self.config.data.image_size),
+                    "logs/imagenet/%dx%d_classifier.pt" % (self.config.data.image_size, self.config.data.image_size),
                 )
                 if not os.path.exists(ckpt):
                     image_size = self.config.data.image_size
@@ -214,9 +196,7 @@ class Diffusion(object):
                         % image_size,
                         ckpt,
                     )
-                classifier = create_classifier(
-                    **args_to_dict(self.config.classifier, classifier_defaults().keys())
-                )
+                classifier = create_classifier(**args_to_dict(self.config.classifier, classifier_defaults().keys()))
                 classifier.set_state_dict(state_dict=paddle.load(path=str(ckpt)))
                 classifier.to(self.device)
                 if self.config.classifier.classifier_use_fp16:
@@ -260,12 +240,9 @@ class Diffusion(object):
     def ddpg_wrapper(self, model, cls_fn, logger):
         args, config = self.args, self.config
         dataset, test_dataset = get_dataset(args, config)
-        device_count = paddle.device.cuda.device_count()
         if args.subset_start >= 0 and args.subset_end > 0:
             assert args.subset_end > args.subset_start
-            test_dataset = paddle.io.Subset(
-                dataset=test_dataset, indices=range(args.subset_start, args.subset_end)
-            )
+            test_dataset = paddle.io.Subset(dataset=test_dataset, indices=range(args.subset_start, args.subset_end))
         else:
             args.subset_start = 0
             args.subset_end = len(test_dataset)
@@ -302,9 +279,7 @@ class Diffusion(object):
             cs_ratio = args.deg_scale
             from functions.svd_operators import CS
 
-            A_funcs = CS(
-                config.data.channels, self.config.data.image_size, cs_ratio, self.device
-            )
+            A_funcs = CS(config.data.channels, self.config.data.image_size, cs_ratio, self.device)
         elif deg == "inpainting":
             if self.config.data.dataset == "sst":
                 pass
@@ -313,21 +288,15 @@ class Diffusion(object):
 
                 loaded = np.load("exp/inp_masks/mask.npy")
                 mask = paddle.to_tensor(data=loaded).to(self.device).reshape(-1)
-                missing_r = (
-                    paddle.nonzero(x=mask == 0).astype(dtype="int64").reshape(-1) * 3
-                )
+                missing_r = paddle.nonzero(x=mask == 0).astype(dtype="int64").reshape(-1) * 3
                 missing_g = missing_r + 1
                 missing_b = missing_g + 1
                 missing = paddle.concat(x=[missing_r, missing_g, missing_b], axis=0)
-                A_funcs = Inpainting(
-                    config.data.channels, config.data.image_size, missing, self.device
-                )
+                A_funcs = Inpainting(config.data.channels, config.data.image_size, missing, self.device)
         elif deg == "denoising":
             from functions.svd_operators import Denoising
 
-            A_funcs = Denoising(
-                config.data.channels, self.config.data.image_size, self.device
-            )
+            A_funcs = Denoising(config.data.channels, self.config.data.image_size, self.device)
         elif deg == "colorization":
             from functions.svd_operators import Colorization
 
@@ -337,9 +306,7 @@ class Diffusion(object):
             if args.operator_imp == "SVD":
                 from functions.svd_operators import SuperResolution
 
-                A_funcs = SuperResolution(
-                    config.data.channels, config.data.image_size, blur_by, self.device
-                )
+                A_funcs = SuperResolution(config.data.channels, config.data.image_size, blur_by, self.device)
             else:
                 raise NotImplementedError()
         elif deg == "sr_bicubic":
@@ -349,9 +316,7 @@ class Diffusion(object):
                 if abs(x) <= 1:
                     return (a + 2) * abs(x) ** 3 - (a + 3) * abs(x) ** 2 + 1
                 elif 1 < abs(x) and abs(x) < 2:
-                    return (
-                        a * abs(x) ** 3 - 5 * a * abs(x) ** 2 + 8 * a * abs(x) - 4 * a
-                    )
+                    return a * abs(x) ** 3 - 5 * a * abs(x) ** 2 + 8 * a * abs(x) - 4 * a
                 else:
                     return 0
 
@@ -373,22 +338,21 @@ class Diffusion(object):
                 )
             elif args.operator_imp == "SVD_sst":
                 from functions.svd_operators import SRConv_NonSquare
+
                 A_funcs = SRConv_NonSquare(
-                    kernel / kernel.sum(), 
-                    config.data.channels, 
-                    self.config.data.image_lat, 
-                    self.config.data.image_lon, 
-                    self.device, 
+                    kernel / kernel.sum(),
+                    config.data.channels,
+                    self.config.data.image_lat,
+                    self.config.data.image_lon,
+                    self.device,
                     stride=factor,
                 )
             elif args.operator_imp == "FFT":
-                from functions.fft_operators import (Superres_fft,
-                                                     prepare_cubic_filter)
+                from functions.fft_operators import Superres_fft
+                from functions.fft_operators import prepare_cubic_filter
 
                 k = prepare_cubic_filter(1 / factor)
-                kernel = (
-                    paddle.to_tensor(data=k).astype(dtype="float32").to(self.device)
-                )
+                kernel = paddle.to_tensor(data=k).astype(dtype="float32").to(self.device)
                 A_funcs = Superres_fft(
                     kernel / kernel.sum(),
                     config.data.channels,
@@ -421,12 +385,8 @@ class Diffusion(object):
                 raise NotImplementedError()
         elif deg == "deblur_gauss":
             sigma = 10
-            pdf = lambda x: paddle.exp(
-                x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32")
-            )
-            kernel = paddle.to_tensor(
-                data=[pdf(-2), pdf(-1), pdf(0), pdf(1), pdf(2)], dtype="float32"
-            ).to(self.device)
+            pdf = lambda x: paddle.exp(x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32"))
+            kernel = paddle.to_tensor(data=[pdf(-2), pdf(-1), pdf(0), pdf(1), pdf(2)], dtype="float32").to(self.device)
             if args.operator_imp == "SVD":
                 from functions.svd_operators import Deblurring
 
@@ -449,9 +409,7 @@ class Diffusion(object):
                 raise NotImplementedError()
         elif deg == "deblur_aniso":
             sigma = 20
-            pdf = lambda x: paddle.exp(
-                x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32")
-            )
+            pdf = lambda x: paddle.exp(x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32"))
             kernel2 = paddle.to_tensor(
                 data=[
                     pdf(-4),
@@ -467,9 +425,7 @@ class Diffusion(object):
                 dtype="float32",
             ).to(self.device)
             sigma = 1
-            pdf = lambda x: paddle.exp(
-                x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32")
-            )
+            pdf = lambda x: paddle.exp(x=paddle.to_tensor(data=[-0.5 * (x / sigma) ** 2], dtype="float32"))
             kernel1 = paddle.to_tensor(
                 data=[
                     pdf(-4),
@@ -529,9 +485,7 @@ class Diffusion(object):
             img_ind = img_ind + 1
             if deg == "motion_deblur":
                 np.random.seed(seed=img_ind * 10)
-                kernel = paddle.to_tensor(
-                    data=Kernel(size=(61, 61), intensity=0.5).kernelMatrix
-                )
+                kernel = paddle.to_tensor(data=Kernel(size=(61, 61), intensity=0.5).kernelMatrix)
                 A_funcs = Deblurring_fft(
                     kernel / kernel.sum(),
                     config.data.channels,
@@ -542,20 +496,20 @@ class Diffusion(object):
             if self.config.data.dataset == "sst":
                 target = x_orig[1].to(self.device)
                 target = data_transform(self.config, target)
-                if deg == 'inpainting':
+                if deg == "inpainting":
                     from functions.svd_operators import Inpainting_sst
+
                     mask = x_orig[0].reshape([-1])
                     missing = set(i for i, val in enumerate(mask) if val == 0)
-                    A_funcs = Inpainting_sst(config.data.channels, config.data.image_lat, config.data.image_lon, missing, self.device)
+                    A_funcs = Inpainting_sst(
+                        config.data.channels, config.data.image_lat, config.data.image_lon, missing, self.device
+                    )
 
-            x_orig = x_orig[0].to(self.device)
+            x_orig = x_orig[0].to(self.device).astype(dtype="float32")
             x_orig = data_transform(self.config, x_orig)
-            
- 
+
             y = A_funcs.A(x_orig)
-            y = y + args.sigma_y * paddle.randn(shape=y.shape, dtype=y.dtype).cuda(
-                blocking=True
-            )
+            y = y + args.sigma_y * paddle.randn(shape=y.shape, dtype=y.dtype).cuda(blocking=True)
 
             b, hwc = tuple(y.shape)
             if "color" in deg:
@@ -565,8 +519,8 @@ class Diffusion(object):
             elif "inp" in deg or "cs" in deg:
                 pass
             elif args.operator_imp == "SVD_sst":
-                h = self.config.data.image_lat//args.deg_scale
-                w = self.config.data.image_lon//args.deg_scale
+                h = self.config.data.image_lat // args.deg_scale
+                w = self.config.data.image_lon // args.deg_scale
                 y = y.reshape([b, 1, int(h), int(w)])
             else:
                 hw = hwc / 3
@@ -574,58 +528,64 @@ class Diffusion(object):
                 y = y.reshape((b, 3, h, w))
             y = y.reshape((b, hwc))
             if self.config.data.dataset == "sst":
-                Apy = A_funcs.A_pinv_add_eta(
-                    y, max(0.0001, sigma_y**2 * args.eta_tilde)
-                ).view(
-                    [y.shape[0],
-                    config.data.channels,
-                    self.config.data.image_lat,
-                    self.config.data.image_lon]
+                Apy = A_funcs.A_pinv_add_eta(y, max(0.0001, sigma_y**2 * args.eta_tilde)).view(
+                    [y.shape[0], config.data.channels, self.config.data.image_lat, self.config.data.image_lon]
                 )
-                if deg == 'inpainting':
+                if deg == "inpainting":
                     Apy += A_funcs.A_pinv(A_funcs.A(paddle.ones_like(Apy))).reshape([*Apy.shape]) - 1
             else:
-                Apy = A_funcs.A_pinv_add_eta(
-                    y, max(0.0001, sigma_y**2 * args.eta_tilde)
-                ).view(
-                    [y.shape[0],
-                    config.data.channels,
-                    self.config.data.image_size,
-                    self.config.data.image_size]
+                Apy = A_funcs.A_pinv_add_eta(y, max(0.0001, sigma_y**2 * args.eta_tilde)).view(
+                    [y.shape[0], config.data.channels, self.config.data.image_size, self.config.data.image_size]
                 )
-            if True:                 
+            if True:
                 os.makedirs(os.path.join(self.args.image_folder, "Apy"), exist_ok=True)
                 for i in range(len(Apy)):
                     if self.config.data.dataset == "sst":
-                        if deg == 'inpainting': 
-                            save_sst_images(config, args, Apy[i], f"Apy/Apy_{idx_so_far + i}.png", 'Sea surface temperature station data')
+                        if deg == "inpainting":
+                            save_sst_images(
+                                config,
+                                args,
+                                Apy[i],
+                                f"Apy/Apy_{idx_so_far + i}.png",
+                                "Sea surface temperature station data",
+                            )
                         else:
-                            save_sst_images(config, args, y[i].reshape([b, 1, int(h), int(w)]), f"Apy/y_{idx_so_far + i}.png", 'Downsample the forecasted sea surface temperature by a factor of 16')
-                        save_sst_images(config, args, x_orig[i], f"Apy/orig_{idx_so_far + i}.png", 'Forecasted sea surface temperature')
-                        save_sst_images(config, args, target[i], f"Apy/traget_{idx_so_far + i}.png", 'Observed sea surface temperature')
+                            save_sst_images(
+                                config,
+                                args,
+                                y[i].reshape([b, 1, int(h), int(w)]),
+                                f"Apy/y_{idx_so_far + i}.png",
+                                "Downsample the forecasted sea surface temperature by a factor of 16",
+                            )
+                        save_sst_images(
+                            config,
+                            args,
+                            x_orig[i],
+                            f"Apy/orig_{idx_so_far + i}.png",
+                            "Forecasted sea surface temperature",
+                        )
+                        save_sst_images(
+                            config,
+                            args,
+                            target[i],
+                            f"Apy/traget_{idx_so_far + i}.png",
+                            "Observed sea surface temperature",
+                        )
                     else:
                         save_image(
                             inverse_data_transform(config, Apy[i]),
-                            os.path.join(
-                                self.args.image_folder, f"Apy/Apy_{idx_so_far + i}.png"
-                            ),
+                            os.path.join(self.args.image_folder, f"Apy/Apy_{idx_so_far + i}.png"),
                         )
                         save_image(
                             inverse_data_transform(config, x_orig[i]),
-                            os.path.join(
-                                self.args.image_folder, f"Apy/orig_{idx_so_far + i}.png"
-                            ),
+                            os.path.join(self.args.image_folder, f"Apy/orig_{idx_so_far + i}.png"),
                         )
                         if "inp" in deg or "cs" in deg:
                             pass
                         else:
                             save_image(
-                                inverse_data_transform(
-                                    config, y[i].reshape((3, h, w))
-                                ),
-                                os.path.join(
-                                    self.args.image_folder, f"Apy/y_{idx_so_far + i}.png"
-                                ),
+                                inverse_data_transform(config, y[i].reshape((3, h, w))),
+                                os.path.join(self.args.image_folder, f"Apy/y_{idx_so_far + i}.png"),
                             )
             if self.config.data.dataset == "sst":
                 x = paddle.randn(
@@ -658,7 +618,7 @@ class Diffusion(object):
                     config=config,
                     args=args,
                 )
-            lpips_final = 0 #(
+            lpips_final = 0  # (
             #     paddle.squeeze(x=loss_fn_alex(x[0], x_orig.to("cpu"))).detach().numpy()
             # )
             avg_lpips += lpips_final
@@ -666,37 +626,51 @@ class Diffusion(object):
             x = [inverse_data_transform(config, xi) for xi in x]
             for j in range(x[0].shape[0]):
                 if self.config.data.dataset == "sst":
-                    save_sst_images(config, args, x[0][j], f"{idx_so_far + j}_0.png", 'Predicted sea surface temperature')
+                    save_sst_images(
+                        config, args, x[0][j], f"{idx_so_far + j}_0.png", "Predicted sea surface temperature"
+                    )
 
-                    target_i = inverse_data_transform(config, target[0])   
+                    target_i = inverse_data_transform(config, target[0])
                     x_pred = x[0][j]
                     yubao = inverse_data_transform(config, x_orig[0])
-                    x_pred = x_pred*(35.666367+2.0826182)-2.0826182
-                    target_i = target_i*(35.666367+2.0826182)-2.0826182
-                    yubao = yubao*(35.666367+2.0826182)-2.0826182
-                    input_np = x_pred.squeeze().cpu().numpy()  
-                    target_np = target_i.squeeze().cpu().numpy()  
-                    yubao_np = yubao.squeeze().cpu().numpy() 
+                    x_pred = x_pred * (35.666367 + 2.0826182) - 2.0826182
+                    target_i = target_i * (35.666367 + 2.0826182) - 2.0826182
+                    yubao = yubao * (35.666367 + 2.0826182) - 2.0826182
+                    input_np = x_pred.squeeze().cpu().numpy()
+                    target_np = target_i.squeeze().cpu().numpy()
+                    yubao_np = yubao.squeeze().cpu().numpy()
 
-                    error = np.abs(target_np-input_np)
-                    plt.imshow(error, cmap='hot')
-                    plt.colorbar(label='sst')
+                    error = np.abs(target_np - input_np)
+                    plt.imshow(error, cmap="hot")
+                    plt.colorbar(label="sst")
                     plt.title("Absolute error of sea surface temperature")
-                    plt.savefig(os.path.join(self.args.image_folder, f"error_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.savefig(
+                        os.path.join(self.args.image_folder, f"error_{idx_so_far + j}_{0}.png"),
+                        bbox_inches="tight",
+                        dpi=300,
+                    )
                     plt.close()
 
-                    error = np.abs(target_np-yubao_np)
-                    plt.imshow(error, cmap='hot')
-                    plt.colorbar(label='sst')
+                    error = np.abs(target_np - yubao_np)
+                    plt.imshow(error, cmap="hot")
+                    plt.colorbar(label="sst")
                     plt.title("Absolute error of sea surface temperature")
-                    plt.savefig(os.path.join(self.args.image_folder, f"error_yubao_guance_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.savefig(
+                        os.path.join(self.args.image_folder, f"error_yubao_guance_{idx_so_far + j}_{0}.png"),
+                        bbox_inches="tight",
+                        dpi=300,
+                    )
                     plt.close()
 
-                    error = np.abs(yubao_np-input_np)
-                    plt.imshow(error, cmap='hot')
-                    plt.colorbar(label='sst')
+                    error = np.abs(yubao_np - input_np)
+                    plt.imshow(error, cmap="hot")
+                    plt.colorbar(label="sst")
                     plt.title("Absolute error of sea surface temperature")
-                    plt.savefig(os.path.join(self.args.image_folder, f"error_yubao_pred_{idx_so_far + j}_{0}.png"), bbox_inches='tight', dpi=300)
+                    plt.savefig(
+                        os.path.join(self.args.image_folder, f"error_yubao_pred_{idx_so_far + j}_{0}.png"),
+                        bbox_inches="tight",
+                        dpi=300,
+                    )
                     plt.close()
                 else:
                     save_image(
@@ -707,13 +681,10 @@ class Diffusion(object):
                     target = inverse_data_transform(config, target[j])
                 else:
                     target = inverse_data_transform(config, x_orig[j])
-                target = target*(35.666367+2.0826182)-2.0826182
+                target = target * (35.666367 + 2.0826182) - 2.0826182
                 mse = paddle.mean(x=(x_pred - target) ** 2)
                 psnr = 10 * paddle.log10(x=1 / mse)
-                logger.info(
-                    "img_ind: %d, PSNR: %.2f, LPIPS: %.4f"
-                    % (img_ind, psnr, lpips_final)
-                )
+                logger.info("img_ind: %d, PSNR: %.2f, LPIPS: %.4f" % (img_ind, psnr, lpips_final))
                 rmse_pred = paddle.sqrt(mse)
                 psnr_list.append(rmse_pred.cpu().numpy().item())
                 avg_psnr += psnr
@@ -728,7 +699,7 @@ class Diffusion(object):
             )
         avg_psnr = avg_psnr / (idx_so_far - idx_init)
         avg_lpips = avg_lpips / (idx_so_far - idx_init)
-        print('psnr_list',psnr_list)
+        print("psnr_list", psnr_list)
         print("Total Average PSNR: %.2f" % avg_psnr)
         print("Total Average LPIPS: %.4f" % avg_lpips)
         print("Number of samples: %d" % (idx_so_far - idx_init))

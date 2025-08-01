@@ -5,7 +5,7 @@
 # 16x Super-Resolution Bicubic 0.05 Noise
 python main.py --config sst.yml --path_y sst --deg sr_bicubic --sigma_y 0.05 \
 -i DDPG_sst_bicubic_sigma_y_005  --inject_noise 1 --zeta 0.7 --step_size_mode 0 \
---deg_scale 16 --operator_imp SVD
+--deg_scale 16 --operator_imp SVD_sst
 
 # inpainting 0.01 Noise
 python main.py --config sst.yml --path_y sst --deg inpainting --sigma_y 0.01 \
